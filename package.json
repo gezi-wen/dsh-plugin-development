@@ -1,0 +1,32 @@
+{
+  "name": "dsh-plugin-development",
+  "description": "Ships a skill that documents how to build, debug and publish DSH plugins, and registers it as a skill root on install",
+  "version": "0.1.0",
+  "type": "module",
+  "license": "MIT",
+  "files": [
+    "cordis.patch.yml",
+    "skills"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "*",
+    "@deepseek-ai/dsh-skill-filesystem": "*"
+  },
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "plugin",
+    "skill",
+    "development"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gezi-wen/dsh-plugin-development.git"
+  },
+  "homepage": "https://github.com/gezi-wen/dsh-plugin-development#readme"
+}

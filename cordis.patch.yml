@@ -1,0 +1,13 @@
+# dsh-plugin-development bundle patch
+#
+# Registers this package's own `skills/` directory as an extra skill root, so
+# installing the plugin is what puts the skill in place. Same mechanism the
+# shipped agent presets use for their bundled skills; `baseUrl` resolves to
+# this package, so the path follows wherever it is installed.
+
+- insert:
+    - id: dsh-plugin-development-skills
+      name: '@deepseek-ai/dsh-skill-filesystem'
+      config:
+        customSkillDirs:
+          - !!js "process.getBuiltinModule('node:url').fileURLToPath(new URL('skills/', baseUrl))"
