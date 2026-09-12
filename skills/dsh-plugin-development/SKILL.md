@@ -75,8 +75,11 @@ sage-xxx/
 
 1. `dsh --profile web --dump-config` — 组合里有没有插件行？
 2. `profiles/web/node_modules/<pkg>` junction 在不在？
-3. `curl http://127.0.0.1:<port>/` — index HTML 里有没有
-   `{"id":"<pkg>","url":"/plugins/<pkg>/client.js?rev=..."}` 注入行？
+3. `curl` 首页看有没有客户端插件注入行 —— ⚠️ **必须带上 `dsh web` 启动时打印的 `?token=`**，
+   否则被打回 `dsh web authentication required`（0.1.5 实测）。不带 token 的 curl 会拿到空响应，
+   看起来像「插件没注入」，其实连门都没进——这一个假象够骗人半小时。
+   最省事的判据其实是肉眼：会话头部那个时钟就是 `dsh-clock` 的注入效果，
+   它在那儿＝客户端插件链路正常。（bundle 直连形如 `/plugins/<pkg>/client.js?rev=...`，同样要过鉴权。）
    （`<port>` 每次重启都变，动态发现方法见坑三）
 4. `curl` 那个 URL — bundle 是否 200、内容是不是最新（搜你新加的类名/注释）？
 5. `node --check lib/client.js` — 语法对不对。改完 client **立刻**跑这一条，最便宜也最快。
