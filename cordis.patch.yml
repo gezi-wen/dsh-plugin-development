@@ -4,10 +4,18 @@
 # installing the plugin is what puts the skill in place. Same mechanism the
 # shipped agent presets use for their bundled skills; `baseUrl` resolves to
 # this package, so the path follows wherever it is installed.
+#
+# `providerName` must be unique per package: the skill registry rejects a second
+# provider under the same name, so the default ("filesystem") collides with the
+# harness' own provider and with any other plugin built on this mechanism.
+# `includeDefaultRoots: false` keeps this provider to its own directory, since
+# the harness' default provider already scans the project and user roots.
 
 - insert:
     - id: dsh-plugin-development-skills
       name: '@deepseek-ai/dsh-skill-filesystem'
       config:
+        providerName: dsh-plugin-development
+        includeDefaultRoots: false
         customSkillDirs:
           - !!js "process.getBuiltinModule('node:url').fileURLToPath(new URL('skills/', baseUrl))"

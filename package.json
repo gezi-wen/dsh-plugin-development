@@ -1,7 +1,7 @@
 {
   "name": "dsh-plugin-development",
   "description": "Ships a skill that documents how to build, debug and publish DSH plugins, and registers it as a skill root on install",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "type": "module",
   "license": "MIT",
   "files": [
