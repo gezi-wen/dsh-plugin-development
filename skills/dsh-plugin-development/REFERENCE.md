@@ -1,8 +1,7 @@
 # DSH Web UI 插件 — 格式细节与模板
 
-参照实现：`E:\DSH-plugins\dsh-clock`（最小范例：纯 client 半 + 一个时钟）、
-`E:\DSH-plugins\sage-livingroom`、`E:\DSH-plugins\sage-mem`（**星图已并入它**，typert remote 的实战样本）、
-`E:\workspace\sage-guikit`（host 半为主、跑 PowerShell 子进程的实战样本）。
+参照实现：一个纯 client 半的最小插件（会话头部时钟）、一个用 typert remote 的实例、
+一个 host 半为主、跑 PowerShell 子进程的样本（`sage-guikit`，公开仓库）。
 改完任何 client 代码后跑一遍对应包的 `scripts/smoke-client.mjs`。
 
 ## §1 package.json 逐字段
@@ -50,7 +49,7 @@
       name: sage-xxx
 ```
 
-profile 侧（`E:\shengdian\dsh\profiles\web\package.json`）：
+profile 侧（`$DSH_HOME/profiles/<profile>/package.json`）：
 
 ```jsonc
 "dependencies": { "sage-xxx": "link:E:/workspace/sage-xxx" },  // 本地包用 link:
@@ -100,7 +99,7 @@ window.__ModuleLoader__.load({
 - `exports` 必须带 `apply` 和 `inject`；
 - **client 看不到宿主文件系统**：浏览器读不了 `C:\...` 这类路径。要在界面上显示 host 上的图片/文件，
   必须由 host 半转成 **data URL / base64**（或提供可访问的 URL）再回传——只回路径的结果是破图；
-- 全局 `setInterval`/`clearInterval` 在 client 环境可用（`dsh-clock` 先例）；
+- 全局 `setInterval`/`clearInterval` 在 client 环境可用（会话头部时钟那个插件就是这么做的）；
 - CSS 用「幂等注入」约定：`document.head` 加 `style[data-plugin-css="<pkg>/overlay.css"]`，
   写前先 querySelector 判重；类名加独立前缀（`smap-` / `slr-`），多插件共存不打架；
 - 右缘浮标样式（多入口堆叠：第二个起 top 改 `calc(15% + 74px * n)`）：
@@ -185,7 +184,7 @@ await import('file:///E:/workspace/<pkg>/lib/client.js?smoke=' + Date.now())
 
 ## §7 用 link 开发调试（fork → 试验 profile → 三级验证）
 
-2026-09-12 文歌子定：「**以后我们就这样开发插件**」。全链当天实测通过。
+一条实践约定：「**以后就按这个流程开发插件**」。全链实测通过。
 
 | 想做的事 | 命令 |
 |---|---|
@@ -209,7 +208,7 @@ await import('file:///E:/workspace/<pkg>/lib/client.js?smoke=' + Date.now())
   遍历安装体的依赖 + peer 闭包重建它——老「手搓 junction 桥」的**目标端**不用再管
 - `healProfileModuleFallback()` 另外把「只有某些 bundle 携带的包」投影进单个 profile 的
   `node_modules`（profile 里看到的 `react` / `loose-envify` 就是它干的）
-- **插件目录在 `$DSH_HOME` 树外面**（`E:\DSH-plugins\`、`E:\workspace\`）⇒ Node 从真实路径
+- **插件目录在 `$DSH_HOME` 树外面**（自研插件通常放自己选的目录，不放进 `$DSH_HOME`）⇒ Node 从真实路径
   向上走永远到不了闭包 ⇒ 插件目录必须自己有一份：`node_modules/@deepseek-ai/<pkg>` 做成
   junction 指向 `$DSH_HOME/profiles/node_modules/@deepseek-ai/<pkg>`。**两个直接依赖
   （cordis + dsh-tools）就够**——junction 的*目标*在闭包里，传递依赖在那里解析。
@@ -241,7 +240,7 @@ await import('file:///E:/workspace/<pkg>/lib/client.js?smoke=' + Date.now())
 ## §8 宿主插件跑 PowerShell 子进程的三个坑
 
 宿主半需要调 Windows 能力时（截屏、注入输入、读窗口），本仓的做法是**每次调用起一个
-`pwsh -Command <脚本>` 子进程 + 内联 C#**（`E:\workspace\sage-guikit` 是完整样本）。三个坑都真踩过：
+`pwsh -Command <脚本>` 子进程 + 内联 C#**（`sage-guikit` 插件是完整样本）。三个坑都真踩过：
 
 **① Defender 会经 AMSI 拦「胖脚本」。** 把「枚举窗口标题 + GetWindowRect + PrintWindow + 画网格」
 全塞进一个工具的脚本里，会被判为恶意脚本**直接拒绝执行**，报
@@ -259,3 +258,35 @@ await import('file:///E:/workspace/<pkg>/lib/client.js?smoke=' + Date.now())
 **③ 编译缓存要按内容失效。** 内联 C# 编译成 DLL 缓存能省每次几百毫秒，但文件名若用固定版本号
 （`U32.v2.dll`），加了新方法后会加载到**缺方法的旧 DLL**，报「U32 不包含名为 X 的方法」。
 用 C# 源码的内容哈希当文件名（`createHash('sha1').update(CS).digest('hex').slice(0,10)`）即可自失效。
+
+## §9 携带技能的插件（skill-shipping plugin）
+
+有一类插件本体**没有 host / client 代码，内容就是一份技能**：`cordis.patch.yml` 往组合里插一行
+`@deepseek-ai/dsh-skill-filesystem`，把包内 `skills/` 注册成一个额外技能根，于是「装插件 = 装技能」。
+本仓自己就是这个形制，`dsh-repair` / `dsh-skill-authoring` 也一样。
+
+```yaml
+- insert:
+    - id: my-skill-plugin-skills
+      name: '@deepseek-ai/dsh-skill-filesystem'
+      config:
+        providerName: my-skill-plugin     # ← 必须写，否则 DSH 起不来
+        includeDefaultRoots: false        # ← 建议写，见下
+        customSkillDirs:
+          - !!js "process.getBuiltinModule('node:url').fileURLToPath(new URL('skills/', baseUrl))"
+```
+
+**`providerName` 不写会让 DSH 整个起不来。** 技能注册表按 provider 名建档、**同名只准一个**，而这个
+插件的 `providerName` **默认值是 `filesystem`**（`dsh-skill-filesystem/lib/index.js:32`：
+`providerName: z.string().min(1).default("filesystem")`）。harness 自己那行已经占了 `filesystem`，
+第二个注册者于是直接报 `a skill provider named "filesystem" is already registered`，
+**插件树加载失败、DSH 崩在 readiness 之前**——而且**只有同时装两个这类插件才会炸**，只装一个一切正常。
+本仓 0.1.1 就带着这个 bug 发出去过，0.1.2 才修掉（2026-09-13）。
+
+- 每个包用**自己的包名**当 `providerName`，互不冲突
+- `includeDefaultRoots: false` 是第二件该做的事：项目 / 用户技能根由 harness 自带那个 provider 扫，
+  这个 provider 只管包内 `skills/`；不写的话 N 个插件会把默认根扫 N 遍
+- `!!js` 里的 `baseUrl` 指向**本包**，所以路径跟着安装位置走，不用写绝对路径
+
+**验证别只看 `--dump-config`**：它只验配置组合，这个 bug 在组合层完全看不出来。要么真启动一个
+隔离实例，要么**把两个同类插件同时挂进一个试验 profile**——只挂一个永远发现不了。

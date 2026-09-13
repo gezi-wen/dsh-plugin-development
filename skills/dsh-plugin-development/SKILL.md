@@ -46,13 +46,13 @@ sage-xxx/
 
 改一个**已经在跑**的插件，不要在生产的 profile 里改。四步：
 
-1. **fork 到工作区**：`E:\workspace\<插件名>`（clone 仓库本身；别从 `node_modules` 里 fork，
-   那里只有发布出去的 `files`）。fork 只是**开发副本**——正式/活体的插件源码按 E 盘协议放
-   `E:\DSH-plugins\<名>\`，profile 的 `link:` 最终要指向那里；`E:\workspace` 是"制作中"区，
+1. **fork 到工作区**：`<workspace>/<插件名>`（clone 仓库本身；别从 `node_modules` 里 fork，
+   那里只有发布出去的 `files`）。fork 只是**开发副本**——正式/活体的插件源码放自己的插件目录
+   `<plugin-dir>\<名>\`，profile 的 `link:` 最终要指向那里；工作区是"制作中"区，
    别把生产 `link:` 长期指向它。
 2. **建试验 profile**（一次性）：`dsh --profile web-test --from-default-profile web --dump-config`
    —— 加 `--dump-config` 只创建 + 打印配置树，**不起服务**。然后把 fork 挂进去：
-   `"<包名>": "link:E:/workspace/<插件名>"` + `bundles` 加包名 + 在该目录 `pnpm install`。
+   `"<包名>": "link:<workspace>/<插件名>"` + `bundles` 加包名 + 在该目录 `pnpm install`。
    **`-test` 加在 profile 名上，绝对不要加在插件名上**——同一 profile 一个包名只能有一份，
    给 fork 改名会连环撞（patch 里的 `name` 仍指向原名；两个插件注册的工具名/槽 id 会冲突）。
 3. **三级验证，别跳级**（每级验的东西不一样）：
@@ -78,7 +78,7 @@ sage-xxx/
 3. `curl` 首页看有没有客户端插件注入行 —— ⚠️ **必须带上 `dsh web` 启动时打印的 `?token=`**，
    否则被打回 `dsh web authentication required`（0.1.5 实测）。不带 token 的 curl 会拿到空响应，
    看起来像「插件没注入」，其实连门都没进——这一个假象够骗人半小时。
-   最省事的判据其实是肉眼：会话头部那个时钟就是 `dsh-clock` 的注入效果，
+   最省事的判据其实是肉眼：会话头部那个时钟就是某个 client 插件的注入效果，
    它在那儿＝客户端插件链路正常。（bundle 直连形如 `/plugins/<pkg>/client.js?rev=...`，同样要过鉴权。）
    （`<port>` 每次重启都变，动态发现方法见坑三）
 4. `curl` 那个 URL — bundle 是否 200、内容是不是最新（搜你新加的类名/注释）？
@@ -103,13 +103,13 @@ sage-xxx/
 
 | 入口性质 | 放哪 | 说明 |
 |---|---|---|
-| **日常入口**（会话里随手要用） | `conversation.session.header.actions` | 会话头部那一排、标题旁边。**文歌子 2026-09-12 定的偏好**——用 `order` 把它排在时钟旁边（时钟是 `dsh-clock`，order 30，所以取 31 就紧挨它右侧）。实例：`sage-livingroom` 的「❋ 客厅」按钮 |
+| **日常入口**（会话里随手要用） | `conversation.session.header.actions` | 会话头部那一排、标题旁边。位置由 `order` 决定——想紧挨某个既有入口右侧，就取它 order + 1 |
 | **全局入口 / 面板本体** | `shell.overlay` | 帧级浮层，不依赖会话。全屏面板（veil + modal）放这里；确实要在任何页面都能看到的浮标也放这里 |
 
 不要侧栏。旧的右缘浮标写法（`fixed; right:0; top:15%`，多个按 74px 垂直堆叠）仍可用，
 但**日常入口优先走 `header.actions`**——省地方、符合直觉，也不挡内容。
 
-**端口易变，绝不写死（文歌子 2026-08-23 明确要求落实）**：dsh web 的监听端口
+**端口易变，绝不写死**：dsh web 的监听端口
 **每次重启都会变**——启动命令甚至可能是 `--port 0`（随机空闲端口）。任何文档、
 脚本、测试里看到的 `127.0.0.1:51971` 之类都只是某一次启动的快照。需要访问 Web UI
 时动态发现（已实测）：
@@ -132,5 +132,6 @@ Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
 package.json 逐字段、ModuleLoader bundle 模板、typert remote 三件套
 （host manifest / client codec / $mount）、冒烟脚本全文、坑清单、
 **用 link 开发调试（试验 profile / 模块解析三锚点 / 三级验证）**、
-**宿主插件跑 PowerShell 子进程的三个坑（AMSI 拦胖脚本 / stdout 编码 / 编译缓存失效）**：
+**宿主插件跑 PowerShell 子进程的三个坑（AMSI 拦胖脚本 / stdout 编码 / 编译缓存失效）**、
+**携带技能的插件（`providerName` 不写会让整个 DSH 起不来）**：
 见 [REFERENCE.md](REFERENCE.md)。
