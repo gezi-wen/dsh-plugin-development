@@ -1,11 +1,12 @@
 ---
 name: dsh-plugin-development
-description: Build and ship DSH plugins (host half + client half), develop and debug them safely by forking the plugin and linking it into a throwaway test profile, publish to GitHub/npm, and fix "the plugin loaded but its UI or tool never appears". Use when writing any DSH plugin (client UI or host-side tools), creating sage-* style packages, wiring a plugin into a profile bundle, running PowerShell subprocesses from a host plugin, promoting a dynamic cordis_define plugin into a permanent bundle, or diagnosing a plugin that silently does nothing.
+description: Build and ship DSH plugins (host half + client half), develop and debug them safely by forking the plugin and linking it into a throwaway test profile, design and acceptance-test the plugin's client UI, publish to GitHub/npm, and fix "the plugin loaded but its UI or tool never appears". Use when writing any DSH plugin (client UI or host-side tools), creating sage-* style packages, wiring a plugin into a profile bundle, running PowerShell subprocesses from a host plugin, promoting a dynamic cordis_define plugin into a permanent bundle, reviewing the plugin's settings panel or judging whether its UI is actually usable (布局稿 / 截图验收 / React 报错), publishing a plugin to npm (repository 元数据 / 禁用词脱敏 / 版本号不能重发), installing a just-published version that pnpm blocks as too new, or diagnosing a plugin that silently does nothing.
 ---
 
 # DSH Web UI 插件开发与固化
 
 给 DSH web profile 写带 UI 的静态插件（host 半 + client 半），把动态插件（cordis_define 的产物）固化成永久包，以及排查「插件装了但 UI 不出现」。
+前后两端各自最容易翻车的地方：**UI 怎么验收**（见「UI 插件验收流程」一节）与**怎么发布/安装**（见「发布踩坑」「pnpm 拦新包」两节）。
 
 ## 双半包最小骨架
 
@@ -36,7 +37,7 @@ sage-xxx/
    而 SKILL.md 没有编号章节，于是报「交叉引用找不到对应章节标题」。指章节要么写全名，
    要么用文件内标题。）
 2. **接入 profile**：`profiles/web/package.json` 的 `dependencies` 加
-   `"sage-xxx": "link:E:/workspace/sage-xxx"`，`dsh.profile.bundles` 数组加包名。
+   `"sage-xxx": "link:<workspace>/sage-xxx"`，`dsh.profile.bundles` 数组加包名。
 3. **`pnpm install`**：在 profile 目录跑。漏这步 = DSH 启动 import 失败崩在
    readiness 之前（tavily 插件的教训）。`--dump-config` 只验组合、不验 import，不能替代。
 
@@ -59,12 +60,35 @@ sage-xxx/
    ① `--dump-config` 验**组合** → ② 在 profile 目录 `node -e "import('<包名>')"` 验**模块解析**
    （realpath 要指向 fork）→ ③ 真启动 `dsh --profile web-test --port 0 --no-open` 验**执行**
    （临时塞一句 `console.log` 进 `apply()`，看启动日志里有没有它）。
-4. **发布之后才动生产**：打 tag / 推 GitHub / `npm publish` → 生产 profile 的活体目录
+4. **发布之后才动生产** —— ⚠️ **先确认这个插件在 profile 里是 `link:` 还是实体包**，两条路完全不同：
+
+   **(a) `link:` 部署**（活体目录就是加载源）：打 tag / 推 GitHub / `npm publish` → 生产 profile 的活体目录
    `git checkout <tag> -- <运行时文件>`（**别碰它的 `pnpm-workspace.yaml` / `pnpm-lock.yaml`**，
    那两个是它的安装状态，覆盖会冲掉 junction 桥）→ 重启 dsh web。
 
+   **(b) 实体包**（npm 版本号 / `file:` tgz —— 活体目录**已不是**加载源）：**改活体目录完全无效**。
+   必须：改源码 → 发版（`npm publish`，或重打 tgz 放进 `<plugin-dir>\vendor\`）→ 更新 profile 的依赖
+   （版本号或 tgz 路径变了就改 `package.json`）→ `dsh plugin --profile web install` → 重启。
+   ⚠️ **pnpm 说 "Already up to date" 却仍是旧包时**：连 `node_modules/.pnpm/lock.yaml` 一起删
+   （pnpm 在 `node_modules` 里另留了一份 lock 副本，只删根 `pnpm-lock.yaml` 不够 —— 2026-09-13 实测，
+   `file:` tgz 一度被它顽固解析成 `link:`，删掉这份副本才真正重新解析）。
+
+   **怎么判断属于哪条**：看生产 profile 的 `package.json` 里这个包写的是 `link:`（(a)）还是版本号 /
+   `file:` tgz（(b)）—— 同一个插件换过部署方式就会变，动手前看现场，别凭记忆。
+
 为什么要这么绕：插件目录里 `link:` 的是**生产路径**，直接改等于改线上；而 `--port 0 --no-open`
-起的隔离实例与生产互不干扰（实测两个实例可同时跑，端口各自独立）。
+起的隔离实例与生产**在业务上**互不干扰（实测两个实例可同时跑，端口各自独立）。
+
+⚠️ **但「隔离实例」不等于「隔离文件系统」**（2026-09-17 实测，代价惨重）：任何一次**真实启动**
+（**包括开发时起的 `web-test` 试验实例**）都会跑 `healProfilesModuleFallback`，而它重建的是
+`$DSH_HOME/profiles/node_modules` 这**同一个**生产依赖闭包。当天起预演实例后，生产闭包里
+**95 个 junction 被重指到隔离目录**，叠加升 core 后的依赖树重排 → **250 条不可达** →
+`pnpm install` 一行输出都没有、崩在 exit **-4094**。**换个 profile 名挡不住这一层**，
+能挡住的只有独立 `$DSH_HOME`（而且独立 prefix + 独立 HOME 也只挡一部分）。
+铁律：**开发前对闭包做一次「条目 + 目标」快照，收工后 diff**。另注 `--dump-config`
+**不**触发重建（`materialize: false`，只算不建），只有真启动才 materialize。
+详见技能 `dsh-repair` 的 `references/case-20260917.md`。
+
 机制与踩坑见 REFERENCE.md 的「用 link 开发调试」与「宿主插件跑 PowerShell 的坑」两节。
 
 **手滑红线**：每条 dsh 命令都显式写 `--profile`。`dsh plugin` 的 `--profile` 是**必填**
@@ -74,7 +98,9 @@ sage-xxx/
 ## 「UI 不出现」排查链（按序执行，每步都有硬证据）
 
 1. `dsh --profile web --dump-config` — 组合里有没有插件行？
-2. `profiles/web/node_modules/<pkg>` junction 在不在？
+2. `profiles/web/node_modules/<pkg>` junction 在不在、**穿不穿得透**？「链接存在」不等于
+   「能用」—— `readlink` 有值、目标已消失（悬空）照样让排查一路看起来正常。判据是**穿透可达**：
+   `Test-Path <junction>\package.json` 为真。插件自己目录里的依赖桥同理，见下面「链接体检」。
 3. `curl` 首页看有没有客户端插件注入行 —— ⚠️ **必须带上 `dsh web` 启动时打印的 `?token=`**，
    否则被打回 `dsh web authentication required`（0.1.5 实测）。不带 token 的 curl 会拿到空响应，
    看起来像「插件没注入」，其实连门都没进——这一个假象够骗人半小时。
@@ -91,6 +117,41 @@ sage-xxx/
    「装好但没刷新」和「真坏了」的症状一模一样。刷新后**用 GUI 截图验证真实渲染**，
    再**点一次入口确认开合**——冒烟测试过了不等于界面能用，注册成功 ≠ DOM 渲染成功。
 
+## 链接体检：链接「在」不等于「能用」
+
+插件开发里由链接引发的事故，症状总是指向别处（报错点名某个插件的嵌套依赖、或整个 DSH
+崩在 readiness 之前）。排查链第 2 步值得单列。
+
+**穿透验证是唯一判据**：`readlink` 有值、`LinkType` 是 `Junction`、目标路径看着对，
+都**不**证明能用。唯一判据是穿过链接能读到文件：`Test-Path <link>\package.json`。
+pnpm 在 Windows 上生成的 junction 会整体「穿透损坏」——目标在、readlink 有值，穿透却失败。
+
+**什么时候查**：
+
+- DSH 升 core 之后 —— 闭包重排 + 老包名被删，插件目录的依赖桥随即悬空
+  （0.1.6 实测：`dsh-client-runtime` / `dsh-code-runtime` / `dsh-tool-subagent-report` /
+  `dsh-workflow-worker-thread` 等已删包名留下 12 根悬空 junction）
+- 插件改名 / 换目录 / 从 `link:` 改成实体包之后（pnpm **不**剪旧 junction）
+- 启动崩在 readiness 之前、`ERR_MODULE_NOT_FOUND` 指向树外插件
+
+**三条硬约束**：
+
+1. **`@scope` 目录必须下钻一层** —— `@deepseek-ai` 这类目录本身没有 `package.json`，
+   直接判会**全部误报**（实测：不钻报 29 个"坏链接"，钻下去才是真数）
+2. **删链接只能「不跟随」** —— `cmd /c rmdir "<路径>"`（不带 `/s`），或 Node 里
+   `lstatSync` 判 `isSymbolicLink()` 后只 `unlinkSync` / `rmdirSync`。
+   **绝不用 `Remove-Item -Recurse` / `rmdir /s`** —— 它们会顺着 reparse point 递归，
+   把**目标目录**（极端情况是共享的 pnpm store）整片带走
+3. **判定「是垃圾」要两个条件同时满足**：`LinkType` 是 `Junction`/`SymbolicLink`
+   **且** `Test-Path $item.Target` 为假。实体目录哪怕缺 `package.json` 也**不能**删
+
+**依赖桥是什么、peer 该怎么写、`pnpm-workspace.yaml` 要加哪两项** —— 见技能 `dsh-repair` 的
+「依赖桥（树外插件接入宿主）」一节，本技能不重复。
+
+**别自己现写脚本**：技能 `dsh-repair` 自带全套 —— `scripts/link-doctor.js`（审计 + `--fix`）、
+`bridge-doctor.js`（桥体检，有 FAIL 时退出码 1）、`bridge-rebuild.js --fix`（每条建完当场穿透验证）。
+**先体检再动手**，比 `pnpm install` 硬冲靠谱得多。
+
 ## 三个致命坑（都真实发生过）
 
 **布局死锁**：`layout` 的 effect 等 `canvasEl`，而 canvas 要等 `layout` 算完才被
@@ -103,13 +164,13 @@ sage-xxx/
 
 | 入口性质 | 放哪 | 说明 |
 |---|---|---|
-| **日常入口**（会话里随手要用） | `conversation.session.header.actions` | 会话头部那一排、标题旁边。位置由 `order` 决定——想紧挨某个既有入口右侧，就取它 order + 1 |
+| **日常入口**（会话里随手要用） | `conversation.session.header.actions` | 会话头部那一排、标题旁边。**用户 2026-09-12 定的偏好**：位置由 `order` 决定——想紧挨某个既有入口右侧，就取它 order + 1（如某个既有入口的 order 是 30，取 31 就紧挨它右侧） |
 | **全局入口 / 面板本体** | `shell.overlay` | 帧级浮层，不依赖会话。全屏面板（veil + modal）放这里；确实要在任何页面都能看到的浮标也放这里 |
 
 不要侧栏。旧的右缘浮标写法（`fixed; right:0; top:15%`，多个按 74px 垂直堆叠）仍可用，
 但**日常入口优先走 `header.actions`**——省地方、符合直觉，也不挡内容。
 
-**端口易变，绝不写死**：dsh web 的监听端口
+**端口易变，绝不写死（用户 2026-08-23 明确要求落实）**：dsh web 的监听端口
 **每次重启都会变**——启动命令甚至可能是 `--port 0`（随机空闲端口）。任何文档、
 脚本、测试里看到的 `127.0.0.1:51971` 之类都只是某一次启动的快照。需要访问 Web UI
 时动态发现（已实测）：
@@ -126,6 +187,62 @@ Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
 同理推广：给 DSH 配套的辅助服务（MCP http server、sidecar 脚本、测试断言）
 一律**不要绑死端口**去迁就它——stdio 或「随机端口 + 动态回报」才是稳的。
 多个 dsh 实例并存时（如 `--port 0` 与 `--profile web` 各一个），先看命令行再认端口。
+
+## UI 插件验收流程（2026-09-15 返工后定，比 bug 本身值钱）
+
+**事故**：插件设置面板做完了，全程只做 DOM 断言（元素在不在、值对不对），把「点了有反应」
+当成「能用」就交了。用户打开一看：点「编辑」后整块空白、没有「返回上级」的层级感。
+原话是「你根本没有好好拟真测试者不是人类可以简单操作的 UI」——**验收标准错了，不是代码错了**。
+
+**根因**（技术层）：那个「点编辑整块空白」= **React error #31** —— 某个思考强度选项是
+`{id, name, description}` **对象**，被直接当成 `<option>` 的 children。React 只接受
+字符串 / 数字 / 元素，对象 children 直接把子树渲染炸掉，而 DOM 断言只看"元素在不在"，照样全绿。
+
+**正确顺序（一轮几分钟，别省第一步）**：
+
+1. **先出静态布局稿**：独立 `.html`（用官方 CSS 变量 + 假数据），浏览器打开 → 截图 → **给用户看**，
+   改到他说可以为止。此阶段**一行插件代码都不碰**，所以改起来几乎零成本。
+2. **定稿后才落码**：把稿子翻译成 `react.createElement` 树。
+3. **动 UI 前先读 `frontend-design` 技能**——当年没读，直接导致审美与交互层级都粗糙。
+4. **验收要看图**：自己截图并**真的把图读一遍**（`read_image`），拿「人能不能用」当标准——
+   层级感、返回路径、空态、长文本溢出，都只有看图才发现。
+5. 补充硬约束：client 侧插件代码是**纯 ESM + `React.createElement`**，**没有构建步骤、不能写 JSX**
+   （详见 REFERENCE 的「client 半」一节）。
+
+**判据**：DOM 断言全绿 ⇏ 能用。绿只能证明"元素存在"，证明不了"人点得下去"。
+
+## 发布踩坑（2026-09-15 实测，六条 + 2026-09-18 补第七条）
+
+1. **`npm publish` 的输出不要用 `Select-Object -First N` 截断**：管道会改变 `$LASTEXITCODE`
+   的语义，输出被截断后**看起来像成功其实是失败**（或反之）。要看**完整输出**和**真实退出码**。
+2. **首次发布前核对 `repository` / `homepage` / `bugs` 三个字段**。漏了 npm 页面上就没有源码链接，
+   只能补发一版；而**同一个版本号 24 小时内不能重发**，只能升 patch。
+3. **git over HTTPS 用 Basic 认证**：`Bearer` 是 GitHub **API** 的写法，用错会报
+   `remote: invalid credentials`。两者别混。
+4. **发布前跑禁用词扫描**：公开产物里不能留本机绝对路径（如 `<plugin-dir>\...`）、用户名、
+   私人称呼。真实事故：某插件 **0.1.1 / 0.1.2 带着本机路径和人名发出去**，0.1.3 才清掉。
+5. **发布后有几分钟传播延迟**：刚 publish 完立刻 `pnpm add` 会撞
+   `ERR_PNPM_NO_MATCHING_VERSION`，别急着判定"发失败了"。
+6. **`api.github.com` 会间歇性连接超时**：重试即可，不是配置错。
+7. **发布前先查包名有没有被占**：`npm view <包名> version` —— 不存在报 `E404`，存在会打出当前版本。
+   不查的代价是：README、仓库、tag 都准备好了，`npm publish` 才因为 `EPUBLISHCONFLICT` / `403` 失败，白跑一轮。
+   **同名但不同 scope 是两个包**（`dsh-xxx` ≠ `@you/dsh-xxx`），选名字时先想清楚要不要 scope。
+
+## pnpm 拦新包：supply-chain policies（2026-09-17 实测）
+
+pnpm（v11）在 install 时会校验 **supply-chain policies**（新发布的包有最短冷却期），
+输出 `✓ Lockfile passes supply-chain policies`。要装一个刚发布几小时的版本，会被这条挡住。
+解法是在 **profile 的 `pnpm-workspace.yaml`** 里加白名单：
+
+```yaml
+minimumReleaseAgeExclude:
+  - '@scope/pkg@1.2.3'
+```
+
+- 写**精确版本号**。本次把白名单放宽到同一插件的两个包也没触发拦截，但没测过更宽的写法
+- **未验证**：这条排除是否对 `github:` 源依赖同样必要——本次升一个 github tag 时没触发拦截，
+  样本只有一次，别当结论
+- 顺序上和上面「发布后有传播延迟」是两回事：那条等的是 registry 传播，这条是 pnpm 的策略闸
 
 ## 详细格式与模板
 
