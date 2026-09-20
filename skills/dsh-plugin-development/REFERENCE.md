@@ -52,7 +52,7 @@
 profile 侧（`$DSH_HOME/profiles/<profile>/package.json`）：
 
 ```jsonc
-"dependencies": { "sage-xxx": "link:E:/workspace/sage-xxx" },  // 本地包用 link:
+"dependencies": { "sage-xxx": "link:<workspace>/sage-xxx" },  // 本地包用 link:
 "dsh.profile.bundles": [ "...", "sage-xxx" ]                   // 追加到数组尾
 ```
 
@@ -153,13 +153,13 @@ remote.listStars().then((r) => { const d = r && r.ok ? r.value : r; ... });
 
 ```js
 import { createRequire } from 'node:module'
-const req = createRequire('E:/workspace/<pkg>/lib/client.js')
+const req = createRequire('<workspace>/<pkg>/lib/client.js')
 const react = req('react')
 let loaded = null
 globalThis.window = { __ModuleLoader__: { load(def) {
 	loaded = def.factory((n) => n === 'react' ? react : (() => { throw new Error('unexpected ' + n) })())
 }}}
-await import('file:///E:/workspace/<pkg>/lib/client.js?smoke=' + Date.now())
+await import('file:///<workspace>/<pkg>/lib/client.js?smoke=' + Date.now())
 // 断言 loaded.apply 是函数 → mock ctx（get/slots.inject/slots.register/remote.$mount）
 // → await loaded.apply(fakeCtx) → 打印注册到的 slot 清单
 ```
@@ -173,13 +173,15 @@ await import('file:///E:/workspace/<pkg>/lib/client.js?smoke=' + Date.now())
 | rev 不自动生效 | client.js 改动后服务端指纹（rev）会变，但浏览器要手动刷新才拉新 |
 | 页面从未刷新 | 崩溃/换实例后旧页面一直开着 → 新插件永远不可见，与真故障难区分 |
 | F5 打错窗口 | GUI 自动化刷新前先确认前台窗口句柄；最小化窗口 activate 不回前台 |
-| Windows file URL | 动态 import 本地路径必须三斜杠 `file:///E:/...` |
+| Windows file URL | 动态 import 本地路径必须三斜杠 `file:///<workspace>/...` |
 | exports["./client"] | 必须存在且为字符串或单 default 条件形式，否则扫描报错 |
 | 漏 pnpm install | 启动 import 失败崩在 readiness 前；dump-config 验不出 |
 | 入口绑 Run 卡片 | `tool.view.cordis` 只适合附着运行结果；常驻入口用 `shell.overlay` |
 | seq/记录损坏 | 会话日志问题见 memory `reference_session-repair.md`（另一套工具链） |
 | 改名留残链 | 插件改名后 `pnpm install` **不一定**清掉旧的 `node_modules/<旧名>` junction——它会悬空。
 手动摘：`cmd /c rmdir <junction 路径>`（只删链接、不碰目标；`Remove-Item -Recurse` 有删到目标内容的风险） |
+| 依赖桥悬空（升级同类坑） | DSH 升 core 后闭包重排、老包名消失，插件目录的依赖桥同样会悬空——机制与体检脚本见技能 `dsh-repair` 的「依赖桥」一节 |
+| 链接「在」不「能用」 | `readlink` 有值 / `LinkType=Junction` 都**不**证明可用，判据只有穿透读 `package.json` 成功。`@scope` 目录必须下钻一层再判，否则全部误报 |
 | 同名两份 | 同一 profile 里一个包名只能有一份；两个插件注册相同工具名/槽 id 会冲突。要并存就换 profile |
 
 ## §7 用 link 开发调试（fork → 试验 profile → 三级验证）
@@ -189,7 +191,7 @@ await import('file:///E:/workspace/<pkg>/lib/client.js?smoke=' + Date.now())
 | 想做的事 | 命令 |
 |---|---|
 | 从内置模板克隆试验 profile | `dsh --profile web-test --from-default-profile web --dump-config`（**加 `--dump-config` 只创建 + 打印，不起服务**） |
-| 把 fork 挂进去 | profile 的 `package.json`：`"<包名>": "link:E:/workspace/<插件名>"` + `bundles` 加包名 → 该目录 `pnpm install` |
+| 把 fork 挂进去 | profile 的 `package.json`：`"<包名>": "link:<workspace>/<插件名>"` + `bundles` 加包名 → 该目录 `pnpm install` |
 | 起隔离实例 | `dsh --profile web-test --port 0 --no-open`（port 0 = 系统挑空闲端口；`--no-open` = 不抢浏览器） |
 
 - **`dsh plugin ...` 就是 pnpm 转发**（`@deepseek-ai/dsh/bin.js:105` 注释原话
@@ -204,8 +206,11 @@ await import('file:///E:/workspace/<pkg>/lib/client.js?smoke=' + Date.now())
 > bundle 名先**从 DSH 安装体**解析、再**从 profile 目录**解析；profile 的 `node_modules` 优先；
 > `$DSH_HOME/profiles/node_modules` 靠 **Node 常规向上查找**供货。
 
-- **`$DSH_HOME/profiles/node_modules` 现在由 DSH 自愈**：`healProfilesModuleFallback()` 每次启动
-  遍历安装体的依赖 + peer 闭包重建它——老「手搓 junction 桥」的**目标端**不用再管
+- **`$DSH_HOME/profiles/node_modules` 由 DSH 自愈（0.1.6-alpha.1 及更早的启动路径）**：`healProfilesModuleFallback()` 每次启动
+  遍历安装体的依赖 + peer 闭包重建它——老「手搓 junction 桥」的**目标端**不用再管。
+  ⚠️ **alpha.2 起启动不再走这条重建**（runtime 模式改走 `createProfileResolutionGeneration`，
+  见上一节「测试卫生」）——「目标端」仍是上次重建留下的静态状态，升级换版本后不再自动刷新，
+  要自己用 `bridge-doctor.js` 体检。
 - `healProfileModuleFallback()` 另外把「只有某些 bundle 携带的包」投影进单个 profile 的
   `node_modules`（profile 里看到的 `react` / `loose-envify` 就是它干的）
 - **插件目录在 `$DSH_HOME` 树外面**（自研插件通常放自己选的目录，不放进 `$DSH_HOME`）⇒ Node 从真实路径
@@ -228,14 +233,29 @@ await import('file:///E:/workspace/<pkg>/lib/client.js?smoke=' + Date.now())
 - 两个实例可以同时跑，互不干扰（实测：测试 50215/65045，生产 58225）。**别用固定端口**去迁就
 - ⚠️ **`job_kill` 只杀 pwsh 外壳，node 子进程会留下**——收工按端口清：
   `Get-NetTCPConnection -LocalPort <p> -State Listen` 取 `OwningProcess` 再 `Stop-Process`
+- ⚠️ **文件系统不隔离（0.1.6-alpha.1 及更早 · 2026-09-17 事故）**：真启动任何 profile（**含 `web-test` 试验实例**）都会触发
+  `healProfilesModuleFallback` 重建**共享的** `$DSH_HOME/profiles/node_modules` 闭包。当天起预演实例后
+  95 根生产 junction 被重指、250 条不可达 → `pnpm install` exit **-4094**（零输出）。
+  **开发前对闭包做条目+目标快照，收工后 diff**；要真隔离必须独立 `$DSH_HOME`。
+  `--dump-config` 只算不建，不触发重建
+- **0.1.6-alpha.2 起，上面这条自动触发路径已不成立**：runtime 模式改走 `createProfileResolutionGeneration`
+  （core 包 `profile-boot` 里的分支：`resolutionMode === "runtime" || resolvedProfile !== void 0`），
+  启动不再物化闭包。但「插件目录自己那份 junction 桥」仍要手动维护 —— 用 `bridge-doctor.js` 体检。
+  *（依据为源码分支，未做行为级复现。）*
 
 ### 发布之后的部署动作
 
 1. fork 里改 → 试验 profile 按上面三级验
 2. 提交 / 打 tag / 推 GitHub / `npm publish`
-3. 生产 profile 的活体目录：`git checkout <tag> -- <运行时文件>`
+3. **部署动作取决于该插件在 profile 里怎么装**：
+   - **`link:` 部署** → 生产 profile 的活体目录：`git checkout <tag> -- <运行时文件>`
    （**不碰它的 `pnpm-workspace.yaml` / `pnpm-lock.yaml`**，那两个是它的安装状态，
    覆盖会冲掉 junction 桥）→ 重启 dsh web
+   - **实体包**（npm 版本号 / `file:` tgz —— 活体目录**已不是**加载源）→ **改活体目录完全无效**。发版后更新 profile 依赖
+     （版本号或 tgz 路径变了就改 `package.json`）→ `dsh plugin --profile <名> install` → 重启。若 pnpm 说
+     "Already up to date" 却没换包，**把 `node_modules/.pnpm/lock.yaml` 也删掉**再 install（pnpm 的 lock 副本会让它跳过重新解析；
+     实测 `file:` tgz 曾被它锁成 `link:`）
+   - 查一个插件现在是哪种：在 profile 目录跑 `pnpm list --depth 0` —— 出现 `@link:` 就是前者，出现版本号就是后者
 
 ## §8 宿主插件跑 PowerShell 子进程的三个坑
 
